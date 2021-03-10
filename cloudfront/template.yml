@@ -1,0 +1,99 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: CloudFormation Template for a CloudFront setup with basic-auth, reverse proxy with cookie re-write, and web-server functionality.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Name of the project
+  DefaultRootObject:
+    Type: String
+    Description: Name of the object to use as the DefaultRootObject in CloudFront.
+    Default: index.html
+  ViewerRequestLambdaArn:
+    Type: String
+    Description: The ARN to the Lambda@edge function for rewriting cookie domain
+    Default: NONE
+  ViewerResponseLambdaArn:
+    Type: String
+    Description: The ARN to the Lambda@edge function for rewriting cookie domain
+    Default: NONE
+
+Conditions:
+  ViewerRequestLambdaArnSet: !Not [!Equals [!Ref ViewerRequestLambdaArn, NONE]]
+  ViewerResponseLambdaArnSet:
+    !Not [!Equals [!Ref ViewerResponseLambdaArn, NONE]]
+
+Resources:
+  StorageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      BucketName: !Sub ${ProjectName}-data-storage
+
+  OriginAccessIdentity:
+    DependsOn: StorageBucket
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub ${ProjectName}-oai
+
+  StorageBucketAccessPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StorageBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: "Allow"
+            Resource: !Sub "arn:aws:s3:::${StorageBucket}/*"
+            Principal:
+              CanonicalUser: !GetAtt OriginAccessIdentity.S3CanonicalUserId
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Distribution for ${ProjectName}"
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - "GET"
+            - "HEAD"
+            - "OPTIONS"
+          Compress: False
+          DefaultTTL: 0
+          MaxTTL: 0
+          MinTTL: 0
+          ForwardedValues:
+            QueryString: False
+            Cookies:
+              Forward: whitelist
+              WhitelistedNames:
+                - "X-Experiment-*"
+          LambdaFunctionAssociations:
+            - !If
+              - ViewerRequestLambdaArnSet
+              - EventType: viewer-request
+                LambdaFunctionARN: !Ref ViewerRequestLambdaArn
+              - !Ref AWS::NoValue
+            - !If
+              - ViewerResponseLambdaArnSet
+              - EventType: viewer-response
+                LambdaFunctionARN: !Ref ViewerResponseLambdaArn
+              - !Ref AWS::NoValue
+          TargetOriginId: !Sub ${ProjectName}-origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: !Ref DefaultRootObject
+        Enabled: True
+        Origins:
+          - DomainName: !Sub ${StorageBucket}.s3.amazonaws.com
+            Id: !Sub ${ProjectName}-origin
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub origin-access-identity/cloudfront/${OriginAccessIdentity}
+        PriceClass: PriceClass_100
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}

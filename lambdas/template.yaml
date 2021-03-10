@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Simple Lambda to run at edge to rewrite cookie headers
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  ProjectName:
+    Type: String
+    Description: Name of the project owning this
+  SsmConfigPath:
+    Type: String
+    Description: Config path for SSM parameters
+    Default: CloudFront
+
+Resources:
+  WeightParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      DataType: text
+      Description: Parameter controlling the version weight
+      Name: !Sub /${SsmConfigPath}/Weight
+      Type: String
+      Value: 50
+
+  ResetWeightsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      DataType: text
+      Description: Parameter controlling the reset
+      Name: !Sub /${SsmConfigPath}/ResetWeights
+      Type: String
+      Value: 123
+
+  ViewerRequestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      AutoPublishAlias: "true"
+      Runtime: python3.7
+      MemorySize: 128
+      Timeout: 3
+      CodeUri: ./viewer-request
+      Handler: handler.lambda_handler
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: !Sub ${SsmConfigPath}/*
+        - Version: "2012-10-17"
+          Statement:
+            Action:
+              - lambda:GetFunction
+            Effect: Allow
+            Resource: "*"
+
+  ViewerResponseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      AutoPublishAlias: "true"
+      Runtime: python3.7
+      MemorySize: 128
+      Timeout: 3
+      CodeUri: ./viewer-response
+      Handler: handler.lambda_handler
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            Action:
+              - lambda:GetFunction
+            Effect: Allow
+            Resource: "*"
+
+Outputs:
+  ViewerRequestFunctionVersion:
+    Value: !Ref ViewerRequestFunction.Version
+  ViewerResponseFunction:
+    Value: !Ref ViewerResponseFunction.Version
